@@ -14,14 +14,69 @@
 
 #include <stdio.h>
 #include <string.h>
+
+// Generic UART and buffer libraries
 #include <zephyr/device.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/ring_buffer.h>
 
+// USB Libraries
 #include <zephyr/usb/usb_device.h>
 #include <zephyr/usb/usbd.h>
 #include <zephyr/logging/log.h>
+
+// GPIO for LED driving
+#include <zephyr/drivers/gpio.h>
+
+
+//
+// GPIO Functions and initializations
+//
+/* 1000 msec = 1 sec */
+#define SLEEP_TIME_MS   1000
+
+/* The devicetree node identifier for the "led0" alias. */
+#define LED0_NODE DT_ALIAS(led0)
+
+/*
+ * A build error on this line means your board is unsupported.
+ * See the sample documentation for information on how to fix this.
+ */
+static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
+
+
+/*
+* @function: blinky
+* @description: infinite loop blinking the LED. Blocking, other threads must be started or interrupts configured
+* @parameters: none
+* @return: none
+*/
+static void blinky(){
+	int ret;
+
+	if (!gpio_is_ready_dt(&led)) {
+		return;
+	}
+
+	ret = gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE);
+	if (ret < 0) {
+		return;
+	}
+
+	while (1) {
+		ret = gpio_pin_toggle_dt(&led);
+		if (ret < 0) {
+			return;
+		}
+		k_msleep(SLEEP_TIME_MS);
+	}
+}
+
+//
+// USB and CDC Functions and initializations
+//
+
 LOG_MODULE_REGISTER(cdc_acm_echo, LOG_LEVEL_INF);
 
 #define RING_BUF_SIZE 1024
@@ -153,10 +208,12 @@ static void interrupt_handler(const struct device *dev, void *user_data)
 
 int main(void)
 {
+
 	const struct device *dev;
 	uint32_t baudrate, dtr = 0U;
 	int ret;
 
+	// Setting up the usb cdc to detect interrupts
 	dev = DEVICE_DT_GET_ONE(zephyr_cdc_acm_uart);
 	if (!device_is_ready(dev)) {
 		LOG_ERR("CDC ACM device not ready");
@@ -215,5 +272,8 @@ int main(void)
 
 	/* Enable rx interrupts */
 	uart_irq_rx_enable(dev);
+
+	blinky();
+
 	return 0;
 }
