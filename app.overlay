@@ -9,3 +9,9 @@
 		compatible = "zephyr,cdc-acm-uart";
 	};
 };
+&i2c0 {
+	hts221@5f {
+		compatible = "st,hts221";
+		reg = <0x5f>;
+	};
+};

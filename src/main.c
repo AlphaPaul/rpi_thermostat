@@ -74,6 +74,14 @@ static void blinky(){
 }
 
 //
+// I2C Functions and initializations
+//
+static void init_hts221(){
+	const struct device *const dev = DEVICE_DT_GET_ONE(st_hts221);
+}
+
+
+//
 // USB and CDC Functions and initializations
 //
 
@@ -272,6 +280,8 @@ int main(void)
 
 	/* Enable rx interrupts */
 	uart_irq_rx_enable(dev);
+
+	init_hts221();
 
 	blinky();
 
