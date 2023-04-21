@@ -101,7 +101,6 @@ static void hts221_init(){
 }
 
 static void hts221_read(){
-	static unsigned int obs;
 	char str[64];
 	int strIndex = 0;
 	struct sensor_value temp, hum;
@@ -120,14 +119,11 @@ static void hts221_read(){
 		return;
 	}
 
-	++obs;
-	strIndex += sprintf(str, "O:%d\r\n", obs);
-
 	/* display temperature */
-	strIndex += sprintf(str + strIndex, "T:%d C\r\n", temp.val1);
+	strIndex += sprintf(str + strIndex, "T:%d.%d C\r\n", temp.val1, temp.val2/10000);
 
 	/* display humidity */
-	sprintf(str + strIndex, "RH:%d%%\r\n", hum.val1);
+	sprintf(str + strIndex, "RH:%d.%d%%\r\n", hum.val1, hum.val2/10000);
 
 	uart_send(str);
 }
