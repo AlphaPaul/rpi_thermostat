@@ -29,12 +29,17 @@
 // GPIO for LED driving
 #include <zephyr/drivers/gpio.h>
 
+// Sensor functions
+#include <zephyr/drivers/sensor.h>
+#include <zephyr/sys/util.h>
+
+
 
 //
 // GPIO Functions and initializations
 //
 /* 1000 msec = 1 sec */
-#define SLEEP_TIME_MS   1000
+#define SLEEP_TIME_MS   2000
 
 /* The devicetree node identifier for the "led0" alias. */
 #define LED0_NODE DT_ALIAS(led0)
@@ -44,6 +49,11 @@
  * See the sample documentation for information on how to fix this.
  */
 static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
+static struct device * hts221Dev = NULL;
+static struct device *uartDev = NULL;
+
+
+static void uart_send(char* str);
 
 
 /*
@@ -54,6 +64,15 @@ static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
 */
 static void blinky(){
 	int ret;
+	ret = gpio_pin_toggle_dt(&led);
+	if (ret < 0) {
+		return;
+	}
+
+}
+
+static void blinky_init(){
+	int ret;
 
 	if (!gpio_is_ready_dt(&led)) {
 		return;
@@ -63,21 +82,54 @@ static void blinky(){
 	if (ret < 0) {
 		return;
 	}
-
-	while (1) {
-		ret = gpio_pin_toggle_dt(&led);
-		if (ret < 0) {
-			return;
-		}
-		k_msleep(SLEEP_TIME_MS);
-	}
 }
 
 //
 // I2C Functions and initializations
 //
-static void init_hts221(){
-	const struct device *const dev = DEVICE_DT_GET_ONE(st_hts221);
+static void hts221_init(){
+	hts221Dev = DEVICE_DT_GET_ONE(st_hts221);
+	if (!device_is_ready(hts221Dev)) {
+		uart_send("hts221 device not ready \r\n");
+		return;
+	}
+	else
+	{
+		uart_send("hts221 device OK \r\n");
+	}
+	
+}
+
+static void hts221_read(){
+	static unsigned int obs;
+	char str[64];
+	int strIndex = 0;
+	struct sensor_value temp, hum;
+	if (sensor_sample_fetch(hts221Dev) < 0) {
+		uart_send("Sensor sample update error\n");
+		return;
+	}
+
+	if (sensor_channel_get(hts221Dev, SENSOR_CHAN_AMBIENT_TEMP, &temp) < 0) {
+		uart_send("Cannot read HTS221 temperature channel\n");
+		return;
+	}
+
+	if (sensor_channel_get(hts221Dev, SENSOR_CHAN_HUMIDITY, &hum) < 0) {
+		uart_send("Cannot read HTS221 humidity channel\n");
+		return;
+	}
+
+	++obs;
+	strIndex += sprintf(str, "O:%d\r\n", obs);
+
+	/* display temperature */
+	strIndex += sprintf(str + strIndex, "T:%d C\r\n", temp.val1);
+
+	/* display humidity */
+	sprintf(str + strIndex, "RH:%d%%\r\n", hum.val1);
+
+	uart_send(str);
 }
 
 
@@ -214,37 +266,31 @@ static void interrupt_handler(const struct device *dev, void *user_data)
 	}
 }
 
-int main(void)
-{
+static void uart_init(){
 
-	const struct device *dev;
 	uint32_t baudrate, dtr = 0U;
-	int ret;
-
+	int ret = 0;
 	// Setting up the usb cdc to detect interrupts
-	dev = DEVICE_DT_GET_ONE(zephyr_cdc_acm_uart);
-	if (!device_is_ready(dev)) {
+	uartDev = DEVICE_DT_GET_ONE(zephyr_cdc_acm_uart);
+	if (!device_is_ready(uartDev)) {
 		LOG_ERR("CDC ACM device not ready");
-		return 0;
+		return ;
 	}
-
-#if defined(CONFIG_USB_DEVICE_STACK_NEXT)
+	#if defined(CONFIG_USB_DEVICE_STACK_NEXT)
 		ret = enable_usb_device_next();
-#else
+	#else
 		ret = usb_enable(NULL);
-#endif
-
+	#endif
 	if (ret != 0) {
 		LOG_ERR("Failed to enable USB");
-		return 0;
+		return;
 	}
-
 	ring_buf_init(&ringbuf, sizeof(ring_buffer), ring_buffer);
 
 	LOG_INF("Wait for DTR");
 
 	while (true) {
-		uart_line_ctrl_get(dev, UART_LINE_CTRL_DTR, &dtr);
+		uart_line_ctrl_get(uartDev, UART_LINE_CTRL_DTR, &dtr);
 		if (dtr) {
 			break;
 		} else {
@@ -252,16 +298,16 @@ int main(void)
 			k_sleep(K_MSEC(100));
 		}
 	}
-
 	LOG_INF("DTR set");
 
+
 	/* They are optional, we use them to test the interrupt endpoint */
-	ret = uart_line_ctrl_set(dev, UART_LINE_CTRL_DCD, 1);
+	ret = uart_line_ctrl_set(uartDev, UART_LINE_CTRL_DCD, 1);
 	if (ret) {
 		LOG_WRN("Failed to set DCD, ret code %d", ret);
 	}
 
-	ret = uart_line_ctrl_set(dev, UART_LINE_CTRL_DSR, 1);
+	ret = uart_line_ctrl_set(uartDev, UART_LINE_CTRL_DSR, 1);
 	if (ret) {
 		LOG_WRN("Failed to set DSR, ret code %d", ret);
 	}
@@ -269,21 +315,55 @@ int main(void)
 	/* Wait 100ms for the host to do all settings */
 	k_msleep(100);
 
-	ret = uart_line_ctrl_get(dev, UART_LINE_CTRL_BAUD_RATE, &baudrate);
+	ret = uart_line_ctrl_get(uartDev, UART_LINE_CTRL_BAUD_RATE, &baudrate);
 	if (ret) {
 		LOG_WRN("Failed to get baudrate, ret code %d", ret);
 	} else {
 		LOG_INF("Baudrate detected: %d", baudrate);
 	}
 
-	uart_irq_callback_set(dev, interrupt_handler);
+	uart_irq_callback_set(uartDev, interrupt_handler);
 
 	/* Enable rx interrupts */
-	uart_irq_rx_enable(dev);
+	uart_irq_rx_enable(uartDev);
+}
 
-	init_hts221();
+static void uart_send(char* str){
 
-	blinky();
+	int send_len;
+
+	uart_irq_tx_enable(uartDev);
+
+	// while (!uart_irq_tx_ready(uartDev)) {
+	// 	k_msleep(100);
+	// }
+
+	send_len = uart_fifo_fill(uartDev, str, strlen(str));
+	if (send_len < strlen(str)) {
+		LOG_ERR("Drop %d bytes", strlen(str) - send_len);
+	}
+
+	LOG_DBG("ringbuf -> tty fifo %d bytes", send_len);
+	
+}
+
+
+int main(void)
+{
+	
+	uart_init();
+	hts221_init();
+	blinky_init();
+
+	while(1){
+		blinky();
+		hts221_read();
+
+		k_msleep(SLEEP_TIME_MS);
+
+	}
+
+	
 
 	return 0;
 }
